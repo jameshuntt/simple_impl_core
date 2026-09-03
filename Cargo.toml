@@ -1,0 +1,19 @@
+[package]
+name = "simple_impl_core"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.70"
+license = "MIT OR Apache-2.0"
+description = "The semantic models behind simple_impl_derive: what a builder field, a shell field, a composite command and a validation rule mean once their attributes are parsed."
+authors = ["James Hunt <james@1o.business>"]
+repository = "https://github.com/jameshuntt/simple_impl_core"
+readme = "README.md"
+keywords = ["proc-macro", "derive", "cli", "builder", "model"]
+categories = ["development-tools::procedural-macro-helpers"]
+include = ["src/**", "tests/**", "Cargo.toml", "README.md", "LICENSE-MIT", "LICENSE-APACHE"]
+
+[dependencies]
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"
+simple_impl_attr_kit = { version = "0.2.0", path = "../simple_impl_attr_kit" }
