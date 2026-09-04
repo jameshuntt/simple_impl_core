@@ -21,6 +21,9 @@ pub struct CompositeEntry {
     pub segment: String,
     pub ty: Type,
     pub init_args: Vec<Ident>,
+    /// The declaring field, for field-style entries; the generated code reads
+    /// it once so the field is not reported as dead.
+    pub field: Option<Ident>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +68,7 @@ impl CompositeEntry {
                 segment,
                 ty: field.ty.clone(),
                 init_args,
+                field: Some(field_ident.clone()),
             }));
         }
 
@@ -106,6 +110,7 @@ impl CompositeEntry {
             segment,
             ty,
             init_args,
+            field: None,
         }))
     }
 

@@ -28,6 +28,9 @@ pub struct BuilderCfg {
 
     // Override init expression in new()
     pub default_expr: Option<TokenStream2>,
+
+    // the setter's name, when not the field's
+    pub method: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -48,6 +51,9 @@ pub struct ShellCfg {
     pub trait_path: Option<Path>,
 
     pub require_order: bool,
+
+    // the program name as an expression on `self`, instead of `cmd`
+    pub cmd_expr: Option<TokenStream2>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -87,6 +93,8 @@ pub struct ShellFieldCfg {
 
     // Positional => push (expr).to_string()
     pub arg_expr: Option<TokenStream2>,
+    // Positional => push v.to_string() when (expr) is Some(v)
+    pub opt_expr: Option<TokenStream2>,
 
     // Positional composite: base field joined with another field, optionally present
     // e.g. host + ":" + port if Some(port)
@@ -109,6 +117,11 @@ pub struct ShellFieldCfg {
     // NEW: The "Counter" pattern
     // e.g. value 3 => "-vvv"
     pub count_flag: Option<String>,
+
+    // a format string with one `{}`, applied to each value before it is pushed
+    pub fmt: Option<String>,
+    // join a Vec into one argument with this separator
+    pub join: Option<String>,
 
     // NEW: Boolean Negation
     // e.g. if false => "--no-check"
