@@ -5,6 +5,7 @@
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::ToTokens;
+use liaise_proc_macro::{collect_all, SynBuffer};
 use simple_impl_attr_kit::{AttrBag, AttrExpected, AttrSchema, AttrValue};
 use syn::{Attribute, Field, Ident, Path, Type};
 
@@ -46,33 +47,34 @@ impl CompositeEntry {
     /// }
     /// ```
     pub fn from_field(field: &Field) -> syn::Result<Option<Self>> {
-        let Some(field_ident) = &field.ident else {
-            return Ok(None);
-        };
+        let mut errs = SynBuffer::new();
+        let entry = Self::from_field_into(field, &mut errs);
+        errs.finish_with(entry)
+    }
 
-        for attr in &field.attrs {
-            if !attr.path().is_ident("composite") {
-                continue;
-            }
+    /// [`Self::from_field`] for a caller that collects: every problem with
+    /// the entry is reported into `errs`. The entry comes back whenever its
+    /// kind could be read, with the field's own name for a method that could
+    /// not, so the caller can still check the rest; it must not generate code
+    /// once anything was reported.
+    pub fn from_field_into(field: &Field, errs: &mut SynBuffer) -> Option<Self> {
+        let field_ident = field.ident.as_ref()?;
+        let attr = field.attrs.iter().find(|attr| attr.path().is_ident("composite"))?;
 
-            let bag = parse_field_composite_attr(attr)?;
-            let (kind, segment) = parse_composite_kind(&bag, attr, true)?;
-            let segment = segment.unwrap_or_else(|| field_ident.to_string());
-            let method = parse_optional_method(&bag, attr)?.unwrap_or_else(|| field_ident.clone());
+        let bag = errs.absorb(parse_field_composite_attr(attr))?;
+        let kind = errs.absorb(parse_composite_kind(&bag, attr, true));
+        let method = errs.absorb(parse_optional_method(&bag, attr)).flatten();
+        let init_args = parse_init_args_into(&bag, attr, errs);
+        let (kind, segment) = kind?;
 
-            let init_args = parse_init_args(&bag, attr)?;
-
-            return Ok(Some(Self {
-                kind,
-                method,
-                segment,
-                ty: field.ty.clone(),
-                init_args,
-                field: Some(field_ident.clone()),
-            }));
-        }
-
-        Ok(None)
+        Some(Self {
+            kind,
+            method: method.unwrap_or_else(|| field_ident.clone()),
+            segment: segment.unwrap_or_else(|| field_ident.to_string()),
+            ty: field.ty.clone(),
+            init_args,
+            field: Some(field_ident.clone()),
+        })
     }
 
     /// Parse registry-style declarations:
@@ -82,36 +84,65 @@ impl CompositeEntry {
     /// pub struct GitRemote;
     /// ```
     pub fn from_registry_attr(attr: &Attribute) -> syn::Result<Option<Self>> {
+        let mut errs = SynBuffer::new();
+        let entry = Self::from_registry_attr_into(attr, &mut errs);
+        errs.finish_with(entry)
+    }
+
+    /// [`Self::from_registry_attr`] for a caller that collects: every problem
+    /// with the entry is reported into `errs`. The entry comes back whenever
+    /// its kind could be read, with stand-ins for a method or type that could
+    /// not, so the caller can still check the rest; it must not generate code
+    /// once anything was reported.
+    pub fn from_registry_attr_into(attr: &Attribute, errs: &mut SynBuffer) -> Option<Self> {
         if !attr.path().is_ident("composite") {
-            return Ok(None);
+            return None;
         }
 
-        let bag = parse_registry_composite_attr(attr)?;
-        let (kind, segment) = parse_composite_kind(&bag, attr, false)?;
-        let segment = segment.ok_or_else(|| {
-            syn::Error::new_spanned(attr, "registry-style #[composite] requires command/surface value")
-        })?;
-
-        let method = match parse_optional_method(&bag, attr)? {
-            Some(method) => method,
-            None => syn::parse_str::<Ident>(&segment.replace('-', "_"))?,
+        let bag = errs.absorb(parse_registry_composite_attr(attr))?;
+        let kind = errs.absorb(parse_composite_kind(&bag, attr, false));
+        let segment = match &kind {
+            Some((_, Some(segment))) => Some(segment.clone()),
+            Some((_, None)) => {
+                errs.push(syn::Error::new_spanned(attr, "registry-style #[composite] requires command/surface value"));
+                None
+            }
+            None => None,
         };
 
-        let ty_tokens = bag.optional_tokens("ty")?.ok_or_else(|| {
-            syn::Error::new_spanned(attr, "registry-style #[composite] requires ty = SomeType")
-        })?;
-        let ty = syn::parse_str::<Type>(ty_tokens)?;
+        let method = match errs.absorb(parse_optional_method(&bag, attr)) {
+            Some(Some(method)) => Some(method),
+            Some(None) => segment.as_ref().and_then(|segment| {
+                errs.absorb(syn::parse_str::<Ident>(&segment.replace('-', "_")).map_err(|e| {
+                    syn::Error::new_spanned(attr, format!("`{segment}` does not make a method name; give method = \"...\": {e}"))
+                }))
+            }),
+            None => None,
+        };
 
-        let init_args = parse_init_args(&bag, attr)?;
+        let ty = match errs.absorb(bag.optional_tokens("ty")) {
+            Some(Some(ty_tokens)) => errs.absorb(
+                syn::parse_str::<Type>(ty_tokens)
+                    .map_err(|e| syn::Error::new_spanned(attr, format!("`ty = {ty_tokens}` is not a type: {e}"))),
+            ),
+            Some(None) => {
+                errs.push(syn::Error::new_spanned(attr, "registry-style #[composite] requires ty = SomeType"));
+                None
+            }
+            None => None,
+        };
 
-        Ok(Some(Self {
+        let init_args = parse_init_args_into(&bag, attr, errs);
+        let (kind, _) = kind?;
+
+        Some(Self {
             kind,
-            method,
-            segment,
-            ty,
+            method: method.unwrap_or_else(|| Ident::new("__simple_impl_unnamed_entry", proc_macro2::Span::call_site())),
+            segment: segment.unwrap_or_default(),
+            ty: ty.unwrap_or_else(|| syn::parse_quote!(())),
             init_args,
             field: None,
-        }))
+        })
     }
 
     pub fn ty_tokens(&self) -> TokenStream2 {
@@ -200,23 +231,32 @@ fn parse_segment_value(
 
 fn parse_optional_method(bag: &AttrBag, attr: &Attribute) -> syn::Result<Option<Ident>> {
     bag.optional_str("method")?
-        .map(syn::parse_str::<Ident>)
+        .map(|m| {
+            syn::parse_str::<Ident>(m)
+                .map_err(|err| syn::Error::new_spanned(attr, format!("method `{m}` is not an identifier: {err}")))
+        })
         .transpose()
-        .map_err(|err| syn::Error::new_spanned(attr, err.to_string()))
 }
 
 
+/// Every name in `init = "a, b"`: each bad one is reported, by name.
 fn parse_init_args(bag: &AttrBag, attr: &Attribute) -> syn::Result<Vec<Ident>> {
     let Some(raw) = bag.optional_str("init")? else {
         return Ok(Vec::new());
     };
 
-    raw.split(',')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            syn::parse_str::<Ident>(part)
-                .map_err(|err| syn::Error::new_spanned(attr, err.to_string()))
-        })
-        .collect()
+    collect_all(raw.split(',').map(str::trim).filter(|part| !part.is_empty()).map(|part| {
+        syn::parse_str::<Ident>(part)
+            .map_err(|err| syn::Error::new_spanned(attr, format!("init name `{part}` is not an identifier: {err}")))
+    }))
+}
+
+/// [`parse_init_args`] for a caller that collects: written but unreadable
+/// names become stand-ins, so "init was written" still holds for the checks
+/// that only need that; nothing is generated once anything was reported.
+fn parse_init_args_into(bag: &AttrBag, attr: &Attribute, errs: &mut SynBuffer) -> Vec<Ident> {
+    match errs.absorb(parse_init_args(bag, attr)) {
+        Some(names) => names,
+        None => vec![Ident::new("__simple_impl_unnamed_init", proc_macro2::Span::call_site())],
+    }
 }
