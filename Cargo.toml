@@ -10,7 +10,7 @@ repository = "https://github.com/jameshuntt/simple_impl_core"
 readme = "README.md"
 keywords = ["proc-macro", "derive", "cli", "builder", "model"]
 categories = ["development-tools::procedural-macro-helpers"]
-include = ["src/**", "tests/**", "Cargo.toml", "README.md", "LICENSE-MIT", "LICENSE-APACHE"]
+include = ["src/**", "tests/**", "Cargo.toml", "CHANGELOG.md", "README.md", "LICENSE-MIT", "LICENSE-APACHE"]
 
 [dependencies]
 syn = { version = "2", features = ["full", "extra-traits"] }
